@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pokédex — Tutte le Generazioni</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="Style.css">
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+    <div class="header-inner">
+        <div class="logo">
+            <span class="logo-ball">●</span>
+            <h1>POKÉDEX</h1>
+            <select id="genSelect" class="gen-select">
+                <option value="all">TUTTE</option>
+                <option value="1" selected>GEN I</option>
+                <option value="2">GEN II</option>
+                <option value="3">GEN III</option>
+                <option value="4">GEN IV</option>
+                <option value="5">GEN V</option>
+                <option value="6">GEN VI</option>
+                <option value="7">GEN VII</option>
+                <option value="8">GEN VIII</option>
+                <option value="9">GEN IX</option>
+            </select>
+        </div>
+        <div class="searchContainer">
+            <div class="search-row">
+                <input type="text" id="searchInput" placeholder="Cerca Pokémon...">
+                <select id="sortSelect" class="sort-select">
+                    <option value="id-asc">N° ↑</option>
+                    <option value="id-desc">N° ↓</option>
+                    <option value="name-asc">A → Z</option>
+                    <option value="name-desc">Z → A</option>
+                    <option value="attack-desc">Attacco ↓</option>
+                    <option value="speed-desc">Velocità ↓</option>
+                    <option value="hp-desc">HP ↓</option>
+                </select>
+                <select id="specialFilter" class="sort-select">
+                    <option value="all">Tutti</option>
+                    <option value="legendary">⭐ Leggendari</option>
+                    <option value="mythical">✨ Misteriosi</option>
+                    <option value="pseudo">💎 Pseudo-legg.</option>
+                    <option value="starter">🌱 Starter</option>
+                </select>
+                <button id="spriteToggle" class="sprite-toggle-btn" title="Toggle sprite retro">👾 Retro</button>
+                <button id="favFilterBtn" class="fav-filter-btn" title="Mostra solo preferiti">♥ Preferiti</button>
+                <button id="randomBtn" class="random-btn" title="Pokémon casuale">🎲 Random</button>
+                <button id="tierListBtn" class="tier-list-btn" title="Tier List drag&drop">🏆 Tier</button>
+                <button id="compareBtn" class="compare-btn hidden" title="Confronta selezionati">⚔ Confronta (<span id="compareCount">0</span>)</button>
+                <button id="themeToggle" class="theme-toggle" title="Cambia tema">☀</button>
+            </div>
+            <div class="type-filters" id="typeFilters"></div>
+            <div class="compare-hint" id="compareHint" style="display:none;">💡 Tasto destro o tieni premuto una card per confrontarla</div>
+        </div>
+        <div class="header-right">
+            <div class="counter" id="counter">0 / 151</div>
+            <div class="dex-progress-wrap" title="Pokémon visti nel tuo Pokédex">
+                <div class="dex-progress-bar" id="dexProgressBar"></div>
+            </div>
+            <div class="dex-progress-label" id="dexProgressLabel">Pokédex: 0</div>
+        </div>
+    </div>
+</header>
+
+<!-- NAV MODI -->
+<nav class="mode-nav">
+    <button class="mode-btn active" data-mode="dex">📖 Pokédex</button>
+    <button class="mode-btn" data-mode="quiz-who">🎮 Chi è?</button>
+    <button class="mode-btn" data-mode="quiz-weak">⚡ Quiz Debolezze</button>
+    <button class="mode-btn adventure-btn" data-mode="adventure">🗺️ Avventura</button>
+</nav>
+
+<!-- GRIGLIA CARD -->
+<main id="mainDex">
+    <div id="cardContainer"></div>
+    <div id="loadingMsg" class="loading-msg">
+        <div class="pokeball-spin"></div>
+        <p>Caricamento Pokédex...</p>
+    </div>
+    <div id="batchLoadingMsg" class="batch-loading hidden">
+        <div class="batch-bar-bg"><div class="batch-bar" id="batchBar"></div></div>
+        <p id="batchText">Caricamento...</p>
+    </div>
+</main>
+
+<!-- MINI-GAME: CHI È QUEL POKEMON -->
+<main id="mainWho" class="hidden">
+    <div class="quiz-container" id="whoContainer"></div>
+</main>
+
+<!-- MINI-GAME: QUIZ DEBOLEZZE -->
+<main id="mainWeak" class="hidden">
+    <div class="quiz-container" id="weakContainer"></div>
+</main>
+
+<!-- AVVENTURA -->
+<main id="mainAdventure" class="hidden">
+    <div id="adventureContainer"></div>
+</main>
+
+<!-- MODAL DETTAGLI -->
+<div id="modalOverlay" class="modal-overlay hidden">
+    <div id="modalBox" class="modal-box">
+        <button id="closeModal" class="close-btn">✕</button>
+        <div id="modalContent"></div>
+    </div>
+</div>
+
+<!-- MODAL CONFRONTO -->
+<div id="compareOverlay" class="modal-overlay hidden">
+    <div id="compareBox" class="compare-box">
+        <button id="closeCompare" class="close-btn">✕</button>
+        <div id="compareContent"></div>
+    </div>
+</div>
+
+<!-- EASTER EGG OVERLAY -->
+<div id="easterOverlay" class="easter-overlay hidden">
+    <div id="easterContent"></div>
+</div>
+
+<!-- MODAL TIER LIST -->
+<div id="tierOverlay" class="modal-overlay hidden">
+    <div class="tier-modal-box">
+        <button class="close-btn" id="closeTierBtn">✕</button>
+        <div id="tierContent"></div>
+    </div>
+</div>
+
+<!-- ERROR TOAST -->
+<div id="errorToast" class="error-toast"></div>
+
+<!-- FOOTER DISCLAIMER -->
+<footer class="site-footer">
+    <p>Fan project — non affiliato con Nintendo o The Pokémon Company.<br>
+    Pokémon e tutti i nomi correlati sono marchi registrati di Nintendo / Creatures Inc. / GAME FREAK Inc.<br>
+    Sprite e dati via <a href="https://pokeapi.co" target="_blank" rel="noopener">PokéAPI</a> · Progetto open source senza scopo di lucro.</p>
+</footer>
+
+<script src="Pokedex.js"></script>
+<script src="Adventure.js"></script>
+<script src="Story.js"></script>
+</body>
+</html>
