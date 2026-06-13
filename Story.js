@@ -378,27 +378,121 @@ function showStoryLevelUpOverlay(member, newLevel, newMoveName, callback) {
         <div style="font-family:var(--pixel);font-size:9px;color:var(--gold);">Lv ${newLevel - 1} → Lv ${newLevel}</div>
     `;
 
-    if (newMoveName) {
-        const move = storyBuildMove(newMoveName, member.pokemon.types[0].type.name);
-        // Sostituisce la mossa con meno PP o più debole
-        const worst = member.moves.reduce((a, b) => (a.power || 0) < (b.power || 0) ? a : b);
-        const worstIdx = member.moves.indexOf(worst);
-        if (worstIdx >= 0) member.moves[worstIdx] = move;
+    const finish = () => { overlay.remove(); callback(); };
 
-        html += `
-            <div style="margin-top:14px;padding:10px 14px;background:rgba(255,255,255,0.05);border-radius:10px;border:1px solid ${typeColor}40;">
-                <div style="font-family:var(--pixel);font-size:7px;color:${typeColor};margin-bottom:4px;">NUOVA MOSSA</div>
-                <div style="font-weight:800;color:var(--white);font-size:13px;">${move.name}</div>
-                <div style="font-size:11px;color:var(--gray);font-weight:700;margin-top:2px;">${move.type.toUpperCase()} · Pot.${move.power || '—'} · PP ${move.pp}</div>
-            </div>
-        `;
+    // Riga descrittiva di una mossa (tipo · potenza · PP)
+    const moveMeta = (mv) => {
+        const t = mv.type || 'normal';
+        const pp = (mv.pp != null) ? mv.pp : ((mv.maxPp != null) ? mv.maxPp : '—');
+        return `${String(t).toUpperCase()} · Pot.${mv.power || '—'} · PP ${pp}`;
+    };
+
+    // Aggiunge alla card un bottone primario "Continua →"
+    const addContinue = () => {
+        const btn = el('button', 'who-next-btn');
+        btn.textContent = 'Continua →';
+        btn.addEventListener('click', finish);
+        card.appendChild(btn);
+    };
+
+    // Nessuna nuova mossa: comportamento classico
+    if (!newMoveName) {
+        card.innerHTML = html;
+        addContinue();
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+        return;
     }
 
-    card.innerHTML = html;
-    const btn = el('button', 'who-next-btn');
-    btn.textContent = 'Continua →';
-    btn.addEventListener('click', () => { overlay.remove(); callback(); });
-    card.appendChild(btn);
+    const move = storyBuildMove(newMoveName, member.pokemon.types[0].type.name);
+    member.moves = member.moves || [];
+
+    // Mossa già conosciuta: niente da fare
+    const alreadyKnown = member.moves.some(m => (m.name || '').toLowerCase() === (move.name || '').toLowerCase());
+    if (alreadyKnown) {
+        card.innerHTML = html + `
+            <div style="margin-top:14px;font-size:12px;color:var(--gray);font-weight:700;">
+                ${capitalize(member.pokemon.name)} conosce già <b style="color:var(--white)">${move.name}</b>.
+            </div>`;
+        addContinue();
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+        return;
+    }
+
+    const newMoveBox = `
+        <div style="margin-top:14px;padding:10px 14px;background:rgba(255,255,255,0.05);border-radius:10px;border:1px solid ${typeColor}40;">
+            <div style="font-family:var(--pixel);font-size:7px;color:${typeColor};margin-bottom:4px;">NUOVA MOSSA</div>
+            <div style="font-weight:800;color:var(--white);font-size:13px;">${move.name}</div>
+            <div style="font-size:11px;color:var(--gray);font-weight:700;margin-top:2px;">${moveMeta(move)}</div>
+        </div>`;
+
+    // CASO A — c'è ancora spazio (< 4 mosse): chiedi se impararla
+    if (member.moves.length < 4) {
+        card.innerHTML = html + newMoveBox + `
+            <div style="margin-top:12px;font-size:12px;color:var(--gray);font-weight:700;">
+                Vuoi insegnare <b style="color:var(--white)">${move.name}</b> a ${capitalize(member.pokemon.name)}?
+            </div>`;
+
+        const row = el('div');
+        row.style.cssText = 'display:flex;gap:8px;margin-top:14px;justify-content:center;flex-wrap:wrap;';
+
+        const learnBtn = el('button', 'who-next-btn');
+        learnBtn.textContent = '📘 Impara';
+        learnBtn.addEventListener('click', () => {
+            member.moves.push(move);
+            if (typeof saveStory === 'function') saveStory();
+            finish();
+        });
+
+        const skipBtn = el('button', 'who-next-btn');
+        skipBtn.style.opacity = '0.7';
+        skipBtn.textContent = '✋ Salta';
+        skipBtn.addEventListener('click', finish);
+
+        row.appendChild(learnBtn);
+        row.appendChild(skipBtn);
+        card.appendChild(row);
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+        return;
+    }
+
+    // CASO B — moveset pieno (4 mosse): scegli quale dimenticare, oppure salta
+    card.innerHTML = html + newMoveBox + `
+        <div style="margin-top:12px;font-size:12px;color:var(--gray);font-weight:700;">
+            ${capitalize(member.pokemon.name)} conosce già 4 mosse.<br>
+            Quale vuoi dimenticare per imparare <b style="color:var(--white)">${move.name}</b>?
+        </div>`;
+
+    const list = el('div');
+    list.style.cssText = 'display:flex;flex-direction:column;gap:6px;margin-top:12px;';
+
+    member.moves.forEach((mv, idx) => {
+        const mvColor = getTypeColor ? getTypeColor(mv.type || 'normal') : '#888';
+        const b = el('button');
+        b.style.cssText = `display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;padding:8px 12px;border:1px solid ${mvColor}55;border-radius:10px;background:rgba(255,255,255,0.04);color:var(--white);cursor:pointer;text-align:left;transition:background .15s;`;
+        b.innerHTML = `
+            <span style="font-weight:800;font-size:12px;">${mv.name}</span>
+            <span style="font-size:10px;color:var(--gray);font-weight:700;">${moveMeta(mv)}</span>`;
+        b.addEventListener('mouseenter', () => { b.style.background = mvColor + '22'; });
+        b.addEventListener('mouseleave', () => { b.style.background = 'rgba(255,255,255,0.04)'; });
+        b.addEventListener('click', () => {
+            member.moves[idx] = move;
+            if (typeof saveStory === 'function') saveStory();
+            finish();
+        });
+        list.appendChild(b);
+    });
+    card.appendChild(list);
+
+    const skipBtn = el('button', 'who-next-btn');
+    skipBtn.style.marginTop = '10px';
+    skipBtn.style.opacity = '0.8';
+    skipBtn.textContent = `✋ Non imparare ${move.name}`;
+    skipBtn.addEventListener('click', finish);
+    card.appendChild(skipBtn);
+
     overlay.appendChild(card);
     document.body.appendChild(overlay);
 }
