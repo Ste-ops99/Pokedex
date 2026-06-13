@@ -224,3 +224,692 @@ function renderAdventureHub() {
         });
     });
 }());
+
+// ===== FIX: Switch forzato quando Pokémon muore + Centro Pokémon hub =====
+
+// FIX 1: Sovrascrive storyEnemyTurn per gestire correttamente la morte del Pokémon
+// Il bug: quando il Pokémon del giocatore muore, il gioco non forza lo switch
+// ma lascia il Pokémon a 0 HP in campo come se potesse ancora agire.
+const _origStoryEnemyTurn = storyEnemyTurn;
+window.storyEnemyTurn = function() {
+    const active = storyActiveMember();
+    const enemy = story.wildPokemon;
+    if (!enemy || !active) return;
+
+    // Se il Pokémon attivo è già a 0 HP prima che il nemico attacchi,
+    // forza subito lo switch invece di continuare
+    if (active.hp <= 0) {
+        story.battleLog.push(capitalize(active.pokemon.name) + ' è esausto!');
+        const nextAlive = story.team.findIndex((m, i) => i !== story.activeSlot && m.hp > 0);
+        if (nextAlive >= 0) {
+            story.battlePhase = 'switch';
+            saveStory();
+            renderStory();
+            setTimeout(() => renderStorySwitchMenu(document.querySelector('.story-battle'), true), 300);
+        } else {
+            storyBattleLost();
+        }
+        return;
+    }
+
+    _origStoryEnemyTurn();
+};
+
+// FIX 2: Aggiunge Centro Pokémon gratuito all'hub medaglie
+// Patch buildGymChoices per inserire il Centro dopo le palestre
+const _origBuildGymChoices = buildGymChoices;
+window.buildGymChoices = function(container) {
+    _origBuildGymChoices(container);
+
+    // Aggiungi Centro Pokémon se qualcuno è ferito
+    const hasInjured = story.team.some(m => m.hp > 0 && m.hp < m.maxHp);
+    const hasKO = story.team.some(m => m.hp <= 0);
+    if (!hasInjured && !hasKO) return;
+
+    const btn = el('button', 'story-choice');
+    btn.style.borderColor = '#66bb6a';
+    btn.style.opacity = '0.9';
+    btn.innerHTML = '🏥 Centro Pokémon <span style="opacity:.6">(cura gratuita la squadra)</span>';
+    btn.addEventListener('click', () => {
+        story.team.forEach(m => {
+            if (m.hp > 0) { // non cura i KO — devono esplorare per riprendersi
+                m.hp = m.maxHp;
+                m.status = null;
+            }
+        });
+        story.battleLog = [];
+        saveStory();
+        renderStory();
+    });
+    container.appendChild(btn);
+};
+
+// ===== PATCH: BARRA XP + MOSSE LEVEL-UP + EVOLUZIONI (STORIA) =====
+
+// --- Utilità XP ---
+function storyXpForNext(lv) {
+    return Math.floor(Math.pow(lv + 1, 2.1) * 1.4) - Math.floor(Math.pow(lv, 2.1) * 1.4);
+}
+
+// --- Barra XP inline usata nella schermata battaglia e squadra ---
+function renderXpBar(member, extraStyle = '') {
+    const needed = storyXpForNext(member.level);
+    const pct = Math.min(100, Math.floor(((member.xp || 0) / needed) * 100));
+    return `<div style="height:4px;background:rgba(255,255,255,0.1);border-radius:2px;overflow:hidden;margin-top:3px;${extraStyle}">
+        <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#7c4dff,#b388ff);border-radius:2px;transition:width 0.4s ease;"></div>
+    </div>
+    <div style="font-family:var(--pixel);font-size:5px;color:rgba(180,140,255,0.7);margin-top:1px;">EXP ${member.xp || 0}/${needed}</div>`;
+}
+
+// --- Patch renderStoryBattle per aggiungere barra XP sotto HP del giocatore ---
+const _origRenderStoryBattle = renderStoryBattle;
+window.renderStoryBattle = function(container) {
+    _origRenderStoryBattle(container);
+    // Trova il pannello HP del giocatore e inietta la barra XP dopo
+    const battle = container.querySelector('.story-battle');
+    if (!battle) return;
+    const hpText = battle.querySelector('.sb-hptext');
+    if (!hpText) return;
+    const member = storyActiveMember();
+    if (!member) return;
+    const xpDiv = document.createElement('div');
+    xpDiv.innerHTML = renderXpBar(member);
+    hpText.parentNode.insertBefore(xpDiv, hpText.nextSibling);
+};
+
+// --- Patch renderStoryTeam per mostrare barra XP in ogni card ---
+const _origRenderStoryTeam = renderStoryTeam;
+window.renderStoryTeam = function() {
+    _origRenderStoryTeam();
+    // Inietta barra XP in ogni stc-hp della squadra
+    const cards = document.querySelectorAll('.story-team-card');
+    story.team.forEach((m, i) => {
+        const card = cards[i];
+        if (!card) return;
+        const hpDiv = card.querySelector('.stc-hp');
+        if (!hpDiv) return;
+        const xpDiv = document.createElement('div');
+        xpDiv.style.cssText = 'padding:0 4px;margin-top:4px;';
+        xpDiv.innerHTML = renderXpBar(m);
+        hpDiv.parentNode.insertBefore(xpDiv, hpDiv.nextSibling);
+    });
+};
+
+// --- Level-up moves: fetch da PokéAPI e restituisce mosse apprese fino al livello dato ---
+function fetchLevelUpMoves(pokemonData, level) {
+    return fetchJSON(pokemonData.species.url)
+        .then(species => fetchJSON(species.evolution_chain.url))
+        .catch(() => null)
+        .then(() => {
+            // Mosse apprese per level-up da pokemonData.moves
+            const learnset = (pokemonData.moves || [])
+                .filter(m => m.version_group_details.some(
+                    vgd => vgd.move_learn_method.name === 'level-up' && vgd.level_learned_at === level
+                ))
+                .map(m => m.move.name);
+            return learnset;
+        })
+        .catch(() => []);
+}
+
+// Costruisce un oggetto mossa da nome (cerca in TYPE_MOVES o usa fallback)
+function storyBuildMove(moveName, type) {
+    // Cerca la mossa nei pool TYPE_MOVES
+    for (const [t, moves] of Object.entries(TYPE_MOVES || {})) {
+        const found = moves.find(m => m.name.toLowerCase() === moveName.replace(/-/g, ' ').toLowerCase());
+        if (found) return { ...found, type: t, pp: found.maxPp || 15, maxPp: found.maxPp || 15 };
+    }
+    // Fallback generico
+    return { name: moveName.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), power: 40, acc: 90, type: type || 'normal', pp: 15, maxPp: 15 };
+}
+
+// --- Mostra overlay level-up con eventuale nuova mossa ---
+function showStoryLevelUpOverlay(member, newLevel, newMoveName, callback) {
+    const overlay = el('div', 'catch-result-overlay');
+    overlay.style.zIndex = '9995';
+    const card = el('div', 'catch-result-card');
+
+    const typeColor = getTypeColor ? getTypeColor(member.pokemon.types[0].type.name) : '#7c4dff';
+
+    let html = `
+        <div style="font-size:28px;margin-bottom:8px;">⬆️</div>
+        <div style="font-family:var(--pixel);font-size:13px;color:var(--gold);margin-bottom:6px;">LEVEL UP!</div>
+        <div style="font-size:15px;font-weight:800;color:var(--white);margin-bottom:4px;">${capitalize(member.pokemon.name)}</div>
+        <div style="font-family:var(--pixel);font-size:9px;color:var(--gold);">Lv ${newLevel - 1} → Lv ${newLevel}</div>
+    `;
+
+    if (newMoveName) {
+        const move = storyBuildMove(newMoveName, member.pokemon.types[0].type.name);
+        // Sostituisce la mossa con meno PP o più debole
+        const worst = member.moves.reduce((a, b) => (a.power || 0) < (b.power || 0) ? a : b);
+        const worstIdx = member.moves.indexOf(worst);
+        if (worstIdx >= 0) member.moves[worstIdx] = move;
+
+        html += `
+            <div style="margin-top:14px;padding:10px 14px;background:rgba(255,255,255,0.05);border-radius:10px;border:1px solid ${typeColor}40;">
+                <div style="font-family:var(--pixel);font-size:7px;color:${typeColor};margin-bottom:4px;">NUOVA MOSSA</div>
+                <div style="font-weight:800;color:var(--white);font-size:13px;">${move.name}</div>
+                <div style="font-size:11px;color:var(--gray);font-weight:700;margin-top:2px;">${move.type.toUpperCase()} · Pot.${move.power || '—'} · PP ${move.pp}</div>
+            </div>
+        `;
+    }
+
+    card.innerHTML = html;
+    const btn = el('button', 'who-next-btn');
+    btn.textContent = 'Continua →';
+    btn.addEventListener('click', () => { overlay.remove(); callback(); });
+    card.appendChild(btn);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+}
+
+// --- Evoluzioni nella storia ---
+function storyCheckEvolution(member, callback) {
+    if (!member || !member.pokemon || !member.pokemon.species) { callback(); return; }
+
+    fetchJSON(member.pokemon.species.url)
+        .then(species => fetchJSON(species.evolution_chain.url))
+        .then(chain => {
+            // Trova il target evoluzione per level-up
+            function findEvoChain(node, targetId) {
+                if (!node) return null;
+                const nodeId = parseInt(node.species.url.split('/').filter(Boolean).pop());
+                if (nodeId === targetId) {
+                    // Cerca evoluzione per level-up
+                    for (const next of (node.evolves_to || [])) {
+                        for (const detail of (next.evolution_details || [])) {
+                            if (detail.trigger?.name === 'level-up' && detail.min_level && member.level >= detail.min_level) {
+                                return parseInt(next.species.url.split('/').filter(Boolean).pop());
+                            }
+                        }
+                    }
+                    return null;
+                }
+                for (const next of (node.evolves_to || [])) {
+                    const result = findEvoChain(next, targetId);
+                    if (result !== null) return result;
+                }
+                return null;
+            }
+
+            const evoId = findEvoChain(chain.chain, member.pokemon.id);
+            if (!evoId) { callback(); return; }
+
+            // Fetch Pokémon evoluto
+            const existing = allPokemon.find(p => p.id === evoId);
+            const doEvolve = (evoData) => {
+                if (!allPokemon.find(p => p.id === evoData.id)) allPokemon.push(evoData);
+                showStoryEvoOverlay(member, evoData, callback);
+            };
+            if (existing) doEvolve(existing);
+            else fetchJSON(BASE_URL + 'pokemon/' + evoId).then(doEvolve).catch(callback);
+        })
+        .catch(callback);
+}
+
+function showStoryEvoOverlay(member, evoData, callback) {
+    const overlay = el('div', 'catch-result-overlay');
+    overlay.style.zIndex = '9994';
+
+    const card = el('div', 'catch-result-card');
+    const oldName = capitalize(member.pokemon.name);
+    const newName = capitalize(evoData.name);
+    const sprite = evoData.sprites?.other?.['official-artwork']?.front_default || evoData.sprites?.front_default || '';
+
+    card.innerHTML = `
+        <div style="font-family:var(--pixel);font-size:10px;color:var(--gold);margin-bottom:10px;">EVOLUZIONE!</div>
+        <img src="${sprite}" style="width:100px;height:100px;object-fit:contain;image-rendering:pixelated;margin-bottom:10px;animation:floatPoke 2s ease-in-out infinite;">
+        <div style="font-size:16px;font-weight:800;color:var(--white);">⭐ ${newName}!</div>
+        <div style="font-size:12px;color:var(--gray);font-weight:700;margin-top:4px;">${oldName} → ${newName} · Lv${member.level}</div>
+    `;
+
+    // Aggiorna il membro
+    const oldHp = member.maxHp;
+    member.pokemon = evoData;
+    member.maxHp = calcHp(evoData, member.level, member.ivs?.hp || 0);
+    member.hp = Math.min(member.hp + (member.maxHp - oldHp), member.maxHp);
+    member.moves = getPokemonMoves(evoData, member.level);
+    if (typeof unlockTCGCard === 'function') unlockTCGCard(evoData.id, { holo: false, source: 'evolution' });
+    saveStory();
+
+    const btn = el('button', 'who-next-btn');
+    btn.textContent = 'Fantastico! →';
+    btn.addEventListener('click', () => { overlay.remove(); callback(); });
+    card.appendChild(btn);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+}
+
+// --- Sovrascrive storyBattleWon per gestire level-up con mosse + evoluzioni ---
+const _origStoryBattleWon = storyBattleWon;
+window.storyBattleWon = function() {
+    const enemy = story.wildPokemon;
+    if (!enemy) { _origStoryBattleWon(); return; }
+
+    // Calcola XP da guadagnare
+    const member = storyActiveMember();
+    if (!member) { _origStoryBattleWon(); return; }
+
+    const xpGain = Math.floor(enemy.level * 1.5) + 5;
+    member.xp = (member.xp || 0) + xpGain;
+    story.battleLog.push(capitalize(enemy.pokemon.name) + ' è stato sconfitto! +' + xpGain + ' EXP');
+
+    // Level-up loop
+    const levelUps = [];
+    let needed = storyXpForNext(member.level);
+    while (member.xp >= needed && member.level < 100) {
+        member.xp -= needed;
+        member.level++;
+        const hpGain = calcHp(member.pokemon, member.level, member.ivs?.hp || 0) - member.maxHp;
+        member.maxHp = calcHp(member.pokemon, member.level, member.ivs?.hp || 0);
+        member.hp = Math.min(member.hp + hpGain, member.maxHp);
+        levelUps.push(member.level);
+        story.battleLog.push('⬆️ ' + capitalize(member.pokemon.name) + ' sale al Lv' + member.level + '!');
+        needed = storyXpForNext(member.level);
+    }
+
+    // Gestisci team battle enemy next
+    if (story.enemyTeam && enemyTeamNext()) {
+        story.battlePhase = 'player';
+        saveStory();
+        renderStory();
+        return;
+    }
+
+    // Premi monete per trainer battle
+    if (['trainer','rival','boss','gym','guardiana'].includes(story._battleType)) {
+        const reward = story._battleType === 'boss' ? 500 : story._battleType === 'guardiana' ? 400 : story._battleType === 'rival' ? 200 : story._battleType === 'gym' ? 150 : 80;
+        story.monete += reward;
+        story.battleLog.push('Hai ricevuto ' + reward + '₽!');
+    }
+    if (story._battleType === 'gym' && story._currentGym) {
+        if (!story.badges.includes(story._currentGym)) {
+            story.badges.push(story._currentGym);
+            const gym = gymByKey(story._currentGym);
+            story.battleLog.push('🏅 Hai ottenuto la ' + (gym ? gym.badge : 'Medaglia') + '!');
+        }
+        story._currentGym = null;
+    }
+
+    saveStory();
+
+    // Catena: level-up overlay → mosse → evoluzione → fine battaglia
+    function processLevelUps(idx, done) {
+        if (idx >= levelUps.length) { done(); return; }
+        const lv = levelUps[idx];
+        // Cerca nuove mosse per questo livello
+        fetchLevelUpMoves(member.pokemon, lv)
+            .then(moves => {
+                const newMove = moves[0] || null;
+                if (newMove) {
+                    showStoryLevelUpOverlay(member, lv, newMove, () => processLevelUps(idx + 1, done));
+                } else {
+                    showStoryLevelUpOverlay(member, lv, null, () => processLevelUps(idx + 1, done));
+                }
+            })
+            .catch(() => {
+                showStoryLevelUpOverlay(member, lv, null, () => processLevelUps(idx + 1, done));
+            });
+    }
+
+    function afterLevelUps() {
+        storyCheckEvolution(member, () => {
+            renderStoryBattleEnd('win');
+        });
+    }
+
+    if (levelUps.length > 0) {
+        processLevelUps(0, afterLevelUps);
+    } else {
+        afterLevelUps();
+    }
+};
+
+/* =====================================================================
+ * PATCH: BATTAGLIA FLUIDA (smooth combat)
+ * ---------------------------------------------------------------------
+ * Riscrive SOLO il rendering della battaglia: aggiorna il DOM in-place a
+ * ogni azione invece di ricostruirlo da zero. Nessuna logica di gioco
+ * cambia. Vengono intercettati due punti:
+ *   - renderStory()       -> durante la battaglia fa un update diff invece
+ *                            di azzerare il container e ridisegnare tutto;
+ *   - renderStoryBattle() -> costruisce una volta lo scenario "transition
+ *                            ready" (barre HP che animano, log scrollabile,
+ *                            pannelli flashabili, sprite animabili).
+ *
+ * Requisiti coperti:
+ *   1) barre HP animate in-place (la CSS transition esistente ora "vede"
+ *      lo stesso elemento e interpola la larghezza)
+ *   2) sprite: lunge di chi attacca + shake di chi subisce il colpo
+ *   3) log scrollabile, fade-in solo sulle righe NUOVE (non tutte)
+ *   4) flash sul pannello colpito: rosso per danno, oro se superefficace
+ *   5) mosse/azioni DISABILITATE (non rimosse) durante il turno nemico
+ * ===================================================================== */
+(function () {
+    'use strict';
+
+    // riferimenti agli originali catturati prima dell'override
+    const _origRenderStory = renderStory;
+
+    // ---- stile iniettato una sola volta (no dipendenze da Style.css) ----
+    if (!document.getElementById('sb-smooth-styles')) {
+        const css = document.createElement('style');
+        css.id = 'sb-smooth-styles';
+        css.textContent = `
+            .story-battle .sb-log { max-height: 96px; overflow-y: auto; scroll-behavior: smooth; }
+            .story-battle .sb-log div { animation: fadeInUp 0.28s ease both; }
+            .sb-actions.is-locked .sb-move,
+            .sb-subactions.is-locked .sb-subbtn { opacity: 0.4; cursor: default; pointer-events: none; }
+            .sb-enemy, .sb-me { border-radius: 6px; }
+            @keyframes sbLungeMe {
+                0%   { transform: translateX(0)   scale(1); }
+                40%  { transform: translateX(26px) scale(1.08); }
+                100% { transform: translateX(0)   scale(1); }
+            }
+            @keyframes sbLungeEnemy {
+                0%   { transform: translateX(0)    scale(1); }
+                40%  { transform: translateX(-26px) scale(1.08); }
+                100% { transform: translateX(0)    scale(1); }
+            }
+            @keyframes sbHitShake {
+                0%,100% { transform: translateX(0); }
+                15% { transform: translateX(-8px); }
+                30% { transform: translateX(8px); }
+                45% { transform: translateX(-6px); }
+                60% { transform: translateX(6px); }
+                75% { transform: translateX(-3px); }
+            }
+            @keyframes sbFaint {
+                0%   { transform: translateY(0) scale(1);    opacity: 1; }
+                100% { transform: translateY(70px) scale(0.6); opacity: 0; }
+            }
+            @keyframes sbPanelFlash {
+                0%   { box-shadow: inset 0 0 0 9999px rgba(233,69,96,0); }
+                30%  { box-shadow: inset 0 0 0 9999px rgba(233,69,96,0.30); }
+                100% { box-shadow: inset 0 0 0 9999px rgba(233,69,96,0); }
+            }
+            @keyframes sbPanelFlashSuper {
+                0%   { box-shadow: inset 0 0 0 9999px rgba(245,197,66,0); }
+                25%  { box-shadow: inset 0 0 0 9999px rgba(245,197,66,0.45); }
+                100% { box-shadow: inset 0 0 0 9999px rgba(245,197,66,0); }
+            }
+        `;
+        document.head.appendChild(css);
+    }
+
+    // stringhe animazione "a riposo" degli sprite (per ripristinarle dopo un one-shot)
+    const FLOAT_ENEMY = 'floatBob 3s ease-in-out infinite';
+    const FLOAT_ME    = 'floatBob 3s ease-in-out infinite 0.8s';
+
+    // snapshot dello stato precedente, usato per il diffing
+    let prev = null;
+
+    // ---------------------------------------------------------------- utils
+    function artwork(member) {
+        return member.pokemon.sprites?.other?.['official-artwork']?.front_default
+            || member.pokemon.sprites?.front_default || '';
+    }
+    function enemyArtwork(enemy) {
+        return (enemy.isShiny && enemy.pokemon.sprites?.other?.['official-artwork']?.front_shiny)
+            || enemy.pokemon.sprites?.other?.['official-artwork']?.front_default
+            || enemy.pokemon.sprites?.front_default || '';
+    }
+    function hpPct(m) { return Math.max(0, Math.round((m.hp / m.maxHp) * 1000) / 10); }
+
+    function nameLine(unit) {
+        return capitalize(unit.pokemon.name)
+            + ' <span class="sb-lv">Lv' + unit.level + '</span> '
+            + (unit.status ? statusBadge(unit.status) : '');
+    }
+
+    function snapshot() {
+        const me = storyActiveMember();
+        const en = story.wildPokemon;
+        return {
+            myId: me ? me.pokemon.id : null,
+            mySlot: story.activeSlot,
+            myHp: me ? me.hp : 0,
+            enId: en ? en.pokemon.id : null,
+            enHp: en ? en.hp : 0,
+            logLen: story.battleLog.length,
+            phase: story.battlePhase
+        };
+    }
+
+    // anima un elemento una sola volta, poi ripristina l'animazione "a riposo"
+    function oneShot(elm, anim, restore) {
+        if (!elm) return;
+        elm.style.animation = 'none';
+        void elm.offsetWidth; // forza il reflow così l'animazione riparte
+        elm.style.animation = anim;
+        elm.addEventListener('animationend', function h() {
+            elm.style.animation = restore || '';
+            elm.removeEventListener('animationend', h);
+        }, { once: true });
+    }
+
+    function flashPanel(panel, isSuper) {
+        if (!panel) return;
+        panel.style.animation = 'none';
+        void panel.offsetWidth;
+        panel.style.animation = (isSuper ? 'sbPanelFlashSuper' : 'sbPanelFlash') + ' 0.5s ease';
+        panel.addEventListener('animationend', function h() {
+            panel.style.animation = '';
+            panel.removeEventListener('animationend', h);
+        }, { once: true });
+    }
+
+    // markup interno del pannello nemico (riusato a creazione e a swap di squadra)
+    function enemyInnerHTML(enemy) {
+        let dots = '';
+        if (story.enemyTeam && story.enemyTeam.length > 1) {
+            const total = story.enemyTeam.length;
+            const alive = total - story.enemyActiveIdx;
+            dots = '<div class="sb-team-dots">' + '\u25cf'.repeat(alive) + '\u25cb'.repeat(total - alive) + '</div>';
+        }
+        const trainer = enemy.trainerName
+            ? '<div style="font-family:var(--pixel);font-size:6px;color:var(--accent);margin-bottom:3px;">' + enemy.trainerName + '</div>'
+            : '';
+        return trainer
+            + '<div class="sb-name">' + nameLine(enemy) + '</div>'
+            + '<div class="sb-hpbar"><div class="sb-hpfill" style="width:' + hpPct(enemy) + '%;background:' + hpColor(enemy.hp / enemy.maxHp) + '"></div></div>'
+            + dots
+            + '<img class="sb-sprite sb-enemy-sprite" src="' + enemyArtwork(enemy) + '" alt="' + enemy.pokemon.name + '">';
+    }
+
+    // area azioni: SEMPRE presente; disabilitata quando non è il turno del giocatore
+    function buildActionArea(battleEl) {
+        const member = storyActiveMember();
+        const locked = story.battlePhase !== 'player';
+
+        const actions = el('div', 'sb-actions');
+        if (locked) actions.classList.add('is-locked');
+        member.moves.forEach((mv, i) => {
+            const b = el('button', 'sb-move');
+            b.style.borderColor = getTypeColor(mv.type);
+            b.innerHTML = '<span class="sb-move-name">' + mv.name + '</span>'
+                + '<span class="sb-move-meta">' + mv.type.toUpperCase() + ' \u00b7 Pot.' + (mv.power || '-')
+                + ' \u00b7 PP ' + mv.pp + '/' + mv.maxPp + '</span>';
+            b.disabled = locked || mv.pp <= 0;
+            if (!locked) b.addEventListener('click', () => storyPlayerAttack(mv, i));
+            actions.appendChild(b);
+        });
+
+        const subs = el('div', 'sb-subactions');
+        if (locked) subs.classList.add('is-locked');
+        const addSub = (label, handler) => {
+            const b = el('button', 'sb-subbtn');
+            b.textContent = label;
+            b.disabled = locked;
+            if (!locked) b.addEventListener('click', handler);
+            subs.appendChild(b);
+        };
+        if (story._canCatch) addSub('\ud83c\udfaf Cattura', () => renderStoryCatchMenu(battleEl));
+        if (story.team.length > 1) addSub('\ud83d\udd04 Cambia', () => renderStorySwitchMenu(battleEl));
+        addSub('\ud83c\udf92 Borsa', () => renderStoryBagMenu(battleEl));
+        if (story._battleType === 'wild') addSub('\ud83c\udfc3 Fuggi', () => storyFlee());
+
+        return { actions, subs };
+    }
+
+    // ------------------------------------------------ costruzione iniziale
+    function buildBattle(container) {
+        const enemy = story.wildPokemon;
+        const member = storyActiveMember();
+        if (!enemy || !member) { story._inBattle = false; _origRenderStory(); return; }
+
+        const battle = el('div', 'story-battle');
+        const field = el('div', 'sb-field');
+
+        const me = el('div', 'sb-me');
+        me.innerHTML =
+            '<img class="sb-sprite sb-my-sprite" src="' + artwork(member) + '" alt="' + member.pokemon.name + '">'
+            + '<div class="sb-name">' + nameLine(member) + '</div>'
+            + '<div class="sb-hpbar"><div class="sb-hpfill" style="width:' + hpPct(member) + '%;background:' + hpColor(member.hp / member.maxHp) + '"></div></div>'
+            + '<div class="sb-hptext">' + member.hp + '/' + member.maxHp + ' HP</div>'
+            + '<div class="sb-xp"></div>';
+        field.appendChild(me);
+
+        const en = el('div', 'sb-enemy');
+        en.innerHTML = enemyInnerHTML(enemy);
+        field.appendChild(en);
+
+        battle.appendChild(field);
+
+        const log = el('div', 'sb-log');
+        log.innerHTML = story.battleLog.slice(-8).map(l => '<div>' + l + '</div>').join('');
+        battle.appendChild(log);
+
+        const xp = me.querySelector('.sb-xp');
+        if (xp && typeof renderXpBar === 'function') xp.innerHTML = renderXpBar(member);
+
+        const { actions, subs } = buildActionArea(battle);
+        battle.appendChild(actions);
+        battle.appendChild(subs);
+
+        container.appendChild(battle);
+        log.scrollTop = log.scrollHeight;
+        prev = snapshot();
+    }
+
+    // ------------------------------------------------- update incrementale
+    function updateBattle(battle) {
+        const member = storyActiveMember();
+        const enemy = story.wildPokemon;
+        if (!member || !enemy) return;
+
+        // un'azione è avvenuta: chiudi eventuali menu aperti (cattura/cambio/borsa)
+        battle.querySelectorAll('.sb-menu').forEach(m => m.remove());
+
+        const meEl   = battle.querySelector('.sb-me');
+        const enEl   = battle.querySelector('.sb-enemy');
+        const log    = battle.querySelector('.sb-log');
+        const mySprite = meEl.querySelector('.sb-my-sprite');
+        const enSprite = enEl.querySelector('.sb-enemy-sprite');
+
+        const p = prev || snapshot();
+        const wasPlayerTurn = p.phase === 'player';
+        const wasEnemyTurn  = p.phase === 'enemy';
+
+        // ---- log: aggiungi solo le righe nuove (fade-in via CSS) ----
+        let newLines = [];
+        if (story.battleLog.length < p.logLen) {
+            log.innerHTML = story.battleLog.slice(-8).map(l => '<div>' + l + '</div>').join('');
+        } else {
+            newLines = story.battleLog.slice(p.logLen);
+            newLines.forEach(line => {
+                const d = document.createElement('div');
+                d.innerHTML = line;
+                log.appendChild(d);
+            });
+            while (log.children.length > 30) log.removeChild(log.firstChild);
+        }
+        const superHit = newLines.some(l => /superefficace/i.test(l));
+
+        // ---- lato nemico ----
+        if (enemy.pokemon.id !== p.enId) {
+            // nuovo Pokémon avversario (squadra): ridisegna il pannello
+            enEl.innerHTML = enemyInnerHTML(enemy);
+            const fresh = enEl.querySelector('.sb-enemy-sprite');
+            oneShot(fresh, 'sbLungeEnemy 0.4s ease', FLOAT_ENEMY);
+        } else {
+            const fill = enEl.querySelector('.sb-hpfill');
+            const text = enEl.querySelector('.sb-hptext'); // il nemico potrebbe non avere hptext
+            const nm   = enEl.querySelector('.sb-name');
+            if (fill) { fill.style.width = hpPct(enemy) + '%'; fill.style.background = hpColor(enemy.hp / enemy.maxHp); }
+            if (text) text.textContent = enemy.hp + '/' + enemy.maxHp + ' HP';
+            if (nm) nm.innerHTML = nameLine(enemy);
+            if (enemy.hp < p.enHp) {
+                oneShot(enSprite, 'sbHitShake 0.45s ease', FLOAT_ENEMY);
+                flashPanel(enEl, superHit);
+                if (wasPlayerTurn) oneShot(mySprite, 'sbLungeMe 0.4s ease', FLOAT_ME);
+            }
+            if (enemy.hp <= 0) oneShot(enSprite, 'sbFaint 0.6s ease forwards', FLOAT_ENEMY);
+        }
+
+        // ---- lato giocatore ----
+        const myFill = meEl.querySelector('.sb-hpfill');
+        const myText = meEl.querySelector('.sb-hptext');
+        const myName = meEl.querySelector('.sb-name');
+        const playerChanged = (member.pokemon.id !== p.myId) || (story.activeSlot !== p.mySlot);
+
+        if (playerChanged) {
+            // cambio Pokémon: aggiorna senza animazione di danno, salta la transition HP
+            mySprite.src = artwork(member);
+            mySprite.alt = member.pokemon.name;
+            myName.innerHTML = nameLine(member);
+            myFill.style.transition = 'none';
+            myFill.style.width = hpPct(member) + '%';
+            myFill.style.background = hpColor(member.hp / member.maxHp);
+            void myFill.offsetWidth;
+            myFill.style.transition = '';
+            myText.textContent = member.hp + '/' + member.maxHp + ' HP';
+            oneShot(mySprite, 'sbLungeMe 0.45s ease', FLOAT_ME);
+        } else {
+            myFill.style.width = hpPct(member) + '%';
+            myFill.style.background = hpColor(member.hp / member.maxHp);
+            myText.textContent = member.hp + '/' + member.maxHp + ' HP';
+            myName.innerHTML = nameLine(member);
+            if (member.hp < p.myHp) {
+                oneShot(mySprite, 'sbHitShake 0.45s ease', FLOAT_ME);
+                flashPanel(meEl, superHit);
+                if (wasEnemyTurn) oneShot(enSprite, 'sbLungeEnemy 0.4s ease', FLOAT_ENEMY);
+            }
+            if (member.hp <= 0) oneShot(mySprite, 'sbFaint 0.6s ease forwards', FLOAT_ME);
+        }
+
+        // ---- barra XP ----
+        const xp = meEl.querySelector('.sb-xp');
+        if (xp && typeof renderXpBar === 'function') xp.innerHTML = renderXpBar(member);
+
+        // ---- area azioni (sempre presente, disabilitata fuori turno) ----
+        const oldActions = battle.querySelector('.sb-actions');
+        const oldSubs = battle.querySelector('.sb-subactions');
+        const { actions, subs } = buildActionArea(battle);
+        if (oldActions) battle.replaceChild(actions, oldActions); else battle.appendChild(actions);
+        if (oldSubs) battle.replaceChild(subs, oldSubs); else battle.appendChild(subs);
+
+        log.scrollTop = log.scrollHeight;
+        prev = snapshot();
+    }
+
+    // -------------------------------------------------------- override API
+    window.renderStoryBattle = function (container) {
+        buildBattle(container);
+    };
+
+    window.renderStory = function () {
+        const container = document.getElementById('adventureContainer');
+        if (story._inBattle && container) {
+            const battle = container.querySelector('.story-battle');
+            const member = storyActiveMember();
+            const enemy = story.wildPokemon;
+            if (battle && member && enemy) {   // battaglia già a schermo -> update fluido
+                updateBattle(battle);
+                return;
+            }
+        }
+        prev = null;            // uscita/ingresso battaglia: reset del diff
+        _origRenderStory();     // percorso originale (intro / nodo / build battaglia)
+    };
+})();
