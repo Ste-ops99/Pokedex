@@ -264,7 +264,8 @@ window.buildGymChoices = function(container) {
     // Aggiungi Centro Pokémon se qualcuno è ferito
     const hasInjured = story.team.some(m => m.hp > 0 && m.hp < m.maxHp);
     const hasKO = story.team.some(m => m.hp <= 0);
-    if (!hasInjured && !hasKO) return;
+    const needsPP = story.team.some(m => m.hp > 0 && (m.moves || []).some(mv => mv.maxPp != null && mv.pp < mv.maxPp));
+    if (!hasInjured && !hasKO && !needsPP) return;
 
     const btn = el('button', 'story-choice');
     btn.style.borderColor = '#66bb6a';
@@ -275,6 +276,7 @@ window.buildGymChoices = function(container) {
             if (m.hp > 0) { // non cura i KO — devono esplorare per riprendersi
                 m.hp = m.maxHp;
                 m.status = null;
+                (m.moves || []).forEach(mv => { if (mv.maxPp != null) mv.pp = mv.maxPp; });
             }
         });
         story.battleLog = [];
