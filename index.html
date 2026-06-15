@@ -151,54 +151,45 @@
 <!-- PATCH: Monete da battaglie selvagge (Mystery Dungeon style) -->
 <script>
 (function() {
-  document.addEventListener('DOMContentLoaded', function() {
-    setTimeout(patchWildMoneyRewards, 200);
+  // Aspetta che tutti gli script siano eseguiti prima di patchare
+  window.addEventListener('load', function() {
+    setTimeout(patchWildMoneyRewards, 300);
   });
 
   function patchWildMoneyRewards() {
-    const originalRenderAdventure = window.renderAdventure;
-    if (!originalRenderAdventure) {
-      setTimeout(patchWildMoneyRewards, 200);
+    // handleBattleVictory è la funzione globale chiamata quando si vince
+    // (sia selvatico che allenatore). La patchiamo per aggiungere
+    // monete extra PRIMA che azzeri wildPokemon.
+    const origHandleBattleVictory = window.handleBattleVictory;
+    if (!origHandleBattleVictory) {
+      console.warn('[Patch] handleBattleVictory non trovata, riprovo...');
+      setTimeout(patchWildMoneyRewards, 500);
       return;
     }
 
-    window.renderAdventure = function() {
+    window.handleBattleVictory = function() {
       const g = window.game;
-
-      // Rileva vittoria su selvatico: il log contiene "è esausto"
-      // e wildPokemon esiste ancora (non ancora nullificato) e battleType è wild
-      if (
-        g &&
-        g.battleType === 'wild' &&
-        g.wildPokemon &&
-        !g._wildRewardGiven &&
-        Array.isArray(g.battleLog) &&
-        g.battleLog.some(l => l.includes('è esausto'))
-      ) {
+      // Solo battaglie selvagge (non allenatori, non boss)
+      if (g && g.battleType === 'wild' && g.wildPokemon) {
         const lv = g.wildPokemon.level || 1;
         const monete = lv * 5;
         g.monete = (g.monete || 0) + monete;
-        g._wildRewardGiven = true;
-        g.battleLog.push('💰 +' + monete + '₽');
+        if (Array.isArray(g.battleLog)) {
+          g.battleLog.push('💰 +' + monete + '₽ (selvatico KO)');
+        }
       }
-
-      // Reset flag quando torniamo alla mappa (wildPokemon viene svuotato)
-      if (g && !g.wildPokemon) {
-        g._wildRewardGiven = false;
-      }
-
-      return originalRenderAdventure.apply(this, arguments);
+      return origHandleBattleVictory.apply(this, arguments);
     };
 
-    // Patch cattura: bonus Lv×8 se la cattura va a buon fine
-    const originalAttemptCatch = window.attemptCatch;
-    if (originalAttemptCatch) {
+    // Patch cattura: bonus Lv×8
+    const origAttemptCatch = window.attemptCatch;
+    if (origAttemptCatch) {
       window.attemptCatch = function(ballType) {
         const g = window.game;
         const lvBefore = g && g.wildPokemon ? g.wildPokemon.level : 0;
         const teamLenBefore = g ? g.team.length : 0;
 
-        const result = originalAttemptCatch.apply(this, arguments);
+        const result = origAttemptCatch.apply(this, arguments);
 
         setTimeout(function() {
           if (window.game && window.game.team.length > teamLenBefore && lvBefore > 0) {
@@ -206,13 +197,13 @@
             window.game.monete = (window.game.monete || 0) + monete;
             if (typeof saveGame === 'function') saveGame();
           }
-        }, 800);
+        }, 900);
 
         return result;
       };
     }
 
-    console.log('[Patch] Monete selvatiche: KO=Lv×5₽, Cattura=Lv×8₽');
+    console.log('[Patch] ✅ Monete selvatiche attive: KO=Lv×5₽, Cattura=Lv×8₽');
   }
 })();
 </script>
