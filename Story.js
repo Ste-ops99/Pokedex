@@ -265,27 +265,106 @@ window.buildGymChoices = function(container) {
     const hasInjured = story.team.some(m => m.hp > 0 && m.hp < m.maxHp);
     const hasKO = story.team.some(m => m.hp <= 0);
     const needsPP = story.team.some(m => m.hp > 0 && (m.moves || []).some(mv => mv.maxPp != null && mv.pp < mv.maxPp));
-    if (!hasInjured && !hasKO && !needsPP) return;
 
-    const btn = el('button', 'story-choice');
-    btn.style.borderColor = '#66bb6a';
-    btn.style.opacity = '0.9';
-    btn.innerHTML = '🏥 Centro Pokémon <span style="opacity:.6">(cura e rianima la squadra)</span>';
-    btn.addEventListener('click', () => {
-        // Cura e rianima TUTTA la squadra: HP pieni, niente stati, PP ripristinati,
-        // anche per i Pokémon esausti (hp <= 0).
-        story.team.forEach(m => {
-            m.hp = m.maxHp;
-            m.status = null;
-            m.statusTurns = 0;
-            (m.moves || []).forEach(mv => { if (mv.maxPp != null) mv.pp = mv.maxPp; });
+    if (hasInjured || hasKO || needsPP) {
+        const btn = el('button', 'story-choice');
+        btn.style.borderColor = '#66bb6a';
+        btn.style.opacity = '0.9';
+        btn.innerHTML = '🏥 Centro Pokémon <span style="opacity:.6">(cura e rianima la squadra)</span>';
+        btn.addEventListener('click', () => {
+            story.team.forEach(m => {
+                m.hp = m.maxHp;
+                m.status = null;
+                m.statusTurns = 0;
+                (m.moves || []).forEach(mv => { if (mv.maxPp != null) mv.pp = mv.maxPp; });
+            });
+            story.battleLog = [];
+            saveStory();
+            renderStory();
         });
-        story.battleLog = [];
-        saveStory();
-        renderStory();
-    });
-    container.appendChild(btn);
+        container.appendChild(btn);
+    }
+
+    // ===== POKÉMARKET =====
+    const shopBtn = el('button', 'story-choice');
+    shopBtn.style.borderColor = '#42a5f5';
+    shopBtn.style.opacity = '0.9';
+    shopBtn.innerHTML = '🛒 PokéMarket <span style="opacity:.6">(💰 ' + (story.monete || 0) + '₽)</span>';
+    shopBtn.addEventListener('click', () => renderStoryShop());
+    container.appendChild(shopBtn);
 };
+
+// ===== POKÉMARKET — negozio per spendere le monete =====
+function renderStoryShop() {
+    const SHOP_ITEMS = [
+        { cat: '🔴 Ball',    items: [
+            { key: 'pokeball',  label: 'Poké Ball',  price: 200,  store: 'balls', emoji: '🔴' },
+            { key: 'superball', label: 'Super Ball',  price: 600,  store: 'balls', emoji: '🔵' },
+            { key: 'ultraball', label: 'Ultra Ball',  price: 1200, store: 'balls', emoji: '⚫' },
+        ]},
+        { cat: '💊 Cure',    items: [
+            { key: 'pozione',      label: 'Pozione',      price: 200,  store: 'bag', emoji: '🧴' },
+            { key: 'superpozione', label: 'Superpozione', price: 500,  store: 'bag', emoji: '🧴' },
+            { key: 'iperpozione',  label: 'Iperpozione',  price: 1500, store: 'bag', emoji: '🧴' },
+            { key: 'antidoto',     label: 'Antidoto',      price: 100,  store: 'bag', emoji: '🟢' },
+        ]},
+    ];
+
+    const ct = document.getElementById('adventureContainer');
+    ct.innerHTML = '';
+    const node = el('div', 'story-node');
+
+    // Titolo
+    const title = el('div', 'story-node-title');
+    title.textContent = '🛒 PokéMarket';
+    node.appendChild(title);
+
+    // Saldo
+    const balDiv = el('div', 'story-text');
+    balDiv.id = 'shop-balance';
+    balDiv.style.cssText = 'text-align:center;font-family:var(--pixel);font-size:11px;margin-bottom:12px;';
+    balDiv.innerHTML = '💰 <span style="color:var(--gold)">' + (story.monete || 0) + '₽</span>';
+    node.appendChild(balDiv);
+
+    // Categorie
+    SHOP_ITEMS.forEach(cat => {
+        const catTitle = el('div', 'story-text');
+        catTitle.style.cssText = 'font-family:var(--pixel);font-size:9px;color:var(--gold);margin:10px 0 4px;';
+        catTitle.textContent = cat.cat;
+        node.appendChild(catTitle);
+
+        cat.items.forEach(item => {
+            const owned = (story[item.store] || {})[item.key] || 0;
+            const canBuy = (story.monete || 0) >= item.price;
+
+            const row = el('button', 'story-choice');
+            row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 14px;margin:4px 0;font-size:12px;'
+                + (canBuy ? 'border-color:#42a5f5;' : 'opacity:.45;cursor:default;');
+            row.innerHTML = item.emoji + ' ' + item.label
+                + ' <span style="opacity:.5">×' + owned + '</span>'
+                + '<span style="color:var(--gold);font-family:var(--pixel);font-size:9px;">' + item.price + '₽</span>';
+            if (canBuy) {
+                row.addEventListener('click', () => {
+                    story.monete -= item.price;
+                    if (!story[item.store]) story[item.store] = {};
+                    story[item.store][item.key] = (story[item.store][item.key] || 0) + 1;
+                    saveStory();
+                    renderStoryShop(); // rende la schermata per aggiornare saldo e quantità
+                });
+            }
+            node.appendChild(row);
+        });
+    });
+
+    // Bottone "Esci"
+    const back = el('button', 'story-choice');
+    back.style.cssText = 'margin-top:16px;border-color:#ef5350;';
+    back.textContent = '← Esci dal negozio';
+    back.addEventListener('click', () => { renderStory(); });
+    node.appendChild(back);
+
+    ct.appendChild(node);
+}
 
 // ===== PATCH: BARRA XP + MOSSE LEVEL-UP + EVOLUZIONI (STORIA) =====
 
