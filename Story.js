@@ -368,6 +368,115 @@ function renderStoryShop() {
 
 // ===== PATCH: BARRA XP + MOSSE LEVEL-UP + EVOLUZIONI (STORIA) =====
 
+// ===== OVERRIDE getPokemonMoves: usa il learnset reale del Pokémon (PokéAPI) =====
+// Il motore base usa solo TYPE_MOVES (4-5 mosse generiche per tipo), quindi tutti i
+// Pokémon dello stesso tipo hanno moveset quasi identici. Questo override incrocia il
+// learnset effettivo del Pokémon (già caricato da PokéAPI in pokemon.moves[]) con la
+// tabella TYPE_MOVES per ottenere mosse specifiche per specie.
+
+const _origGetPokemonMoves = getPokemonMoves;
+
+(function() {
+    // Build lookup: "vine-whip" → {name:"Vine Whip", power, acc, type}
+    let _moveLookup = null;
+    function getMoveLookup() {
+        if (_moveLookup) return _moveLookup;
+        _moveLookup = {};
+        if (typeof TYPE_MOVES === 'undefined') return _moveLookup;
+        for (const [type, moves] of Object.entries(TYPE_MOVES)) {
+            for (const m of moves) {
+                const apiName = m.name.toLowerCase().replace(/ /g, '-');
+                _moveLookup[apiName] = { name: m.name, power: m.power, acc: m.acc, type: type };
+            }
+        }
+        return _moveLookup;
+    }
+
+    window.getPokemonMoves = function(pokemon, level) {
+        level = level || 10;
+        const lookup = getMoveLookup();
+        if (!pokemon.moves || !pokemon.moves.length || !Object.keys(lookup).length) {
+            return _origGetPokemonMoves(pokemon, level);
+        }
+
+        const pokTypes = pokemon.types.map(t => t.type.name);
+
+        // Filtra mosse level-up apprendibili a questo livello
+        const candidates = [];
+        for (const entry of pokemon.moves) {
+            const apiName = entry.move.name; // es. "vine-whip"
+            const info = lookup[apiName];
+            if (!info) continue; // mossa non nella nostra tabella stats
+
+            // Cerca se apprendibile per level-up entro questo livello
+            const details = entry.version_group_details || [];
+            let bestLevel = null;
+            for (const d of details) {
+                if (d.move_learn_method && d.move_learn_method.name === 'level-up'
+                    && d.level_learned_at <= level && d.level_learned_at > 0) {
+                    if (bestLevel === null || d.level_learned_at > bestLevel) {
+                        bestLevel = d.level_learned_at;
+                    }
+                }
+            }
+            if (bestLevel !== null) {
+                candidates.push({ ...info, learnLevel: bestLevel, isSTAB: pokTypes.includes(info.type) });
+            }
+        }
+
+        if (candidates.length < 2) {
+            return _origGetPokemonMoves(pokemon, level);
+        }
+
+        // Selezione: priorità a STAB, poi power più alta, con varietà di tipo
+        // Ordina: STAB prima, poi per livello apprendimento desc, poi power desc
+        candidates.sort((a, b) => {
+            if (a.isSTAB !== b.isSTAB) return a.isSTAB ? -1 : 1;
+            if (a.learnLevel !== b.learnLevel) return b.learnLevel - a.learnLevel;
+            return (b.power || 0) - (a.power || 0);
+        });
+
+        // Prendi max 4 mosse, evitando duplicati di nome e cercando varietà di tipo
+        const picked = [];
+        const usedNames = new Set();
+        const usedTypes = new Set();
+
+        // Prima passata: prendi le migliori uniche per tipo
+        for (const m of candidates) {
+            if (picked.length >= 4) break;
+            if (usedNames.has(m.name)) continue;
+            if (usedTypes.has(m.type) && !m.isSTAB && picked.length >= 2) continue;
+            picked.push(m);
+            usedNames.add(m.name);
+            usedTypes.add(m.type);
+        }
+
+        // Se ne servono altre, riempi senza vincolo tipo
+        for (const m of candidates) {
+            if (picked.length >= 4) break;
+            if (usedNames.has(m.name)) continue;
+            picked.push(m);
+            usedNames.add(m.name);
+        }
+
+        if (picked.length < 2) {
+            return _origGetPokemonMoves(pokemon, level);
+        }
+
+        // Cap power in base al livello (come fa l'originale)
+        const maxPow = level <= 10 ? 50 : level <= 20 ? 70 : level <= 35 ? 100 : 150;
+
+        return picked.map(m => ({
+            name: m.name,
+            type: m.type,
+            power: Math.min(m.power || 40, maxPow),
+            acc: m.acc || 100,
+            pp: 10,
+            maxPp: 10
+        }));
+    };
+})();
+
 // --- Mosse drenanti: curano l'attaccante di una frazione del danno inflitto ---
 // (il meccanismo non era implementato: nessuna mossa drenante curava)
 function storyDrainHeal(attacker, move, dmg, log) {
