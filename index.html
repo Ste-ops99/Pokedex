@@ -151,86 +151,68 @@
 <!-- PATCH: Monete da battaglie selvagge (Mystery Dungeon style) -->
 <script>
 (function() {
-  // Aspetta che il motore sia caricato
   document.addEventListener('DOMContentLoaded', function() {
-    // Piccolo delay per assicurarsi che Adventure.js sia eseguito
-    setTimeout(patchWildMoneyRewards, 100);
+    setTimeout(patchWildMoneyRewards, 200);
   });
 
   function patchWildMoneyRewards() {
-    // Intercettiamo la vittoria in battaglia salvando il riferimento originale
-    // e agganciandoci all'evento di fine battaglia selvatica via MutationObserver
-    // sul log di battaglia. Quando compare "è esausto" per un nemico selvatico,
-    // assegniamo le monete.
-
-    // Monkey-patch di renderAdventure: ogni volta che si renderizza
-    // la schermata "won" (battlePhase === 'won') in una battaglia selvatica,
-    // assegniamo le monete se non già assegnate per questo scontro.
     const originalRenderAdventure = window.renderAdventure;
-    if (!originalRenderAdventure) return;
+    if (!originalRenderAdventure) {
+      setTimeout(patchWildMoneyRewards, 200);
+      return;
+    }
 
     window.renderAdventure = function() {
-      // Controlla se siamo appena usciti da una battaglia selvatica vinta
-      // e le monete non sono ancora state assegnate per questo scontro
+      const g = window.game;
+
+      // Rileva vittoria su selvatico: il log contiene "è esausto"
+      // e wildPokemon esiste ancora (non ancora nullificato) e battleType è wild
       if (
-        window.game &&
-        window.game.battlePhase === 'won' &&
-        window.game.battleType === 'wild' &&
-        window.game.wildPokemon &&
-        !window.game._wildRewardGiven
+        g &&
+        g.battleType === 'wild' &&
+        g.wildPokemon &&
+        !g._wildRewardGiven &&
+        Array.isArray(g.battleLog) &&
+        g.battleLog.some(l => l.includes('è esausto'))
       ) {
-        const lv = window.game.wildPokemon.level || 1;
+        const lv = g.wildPokemon.level || 1;
         const monete = lv * 5;
-        window.game.monete = (window.game.monete || 0) + monete;
-        window.game._wildRewardGiven = true;
-        // Aggiunge riga al log
-        if (Array.isArray(window.game.battleLog)) {
-          window.game.battleLog.push('💰 +' + monete + '₽ (Lv' + lv + ' × 5)');
-        }
+        g.monete = (g.monete || 0) + monete;
+        g._wildRewardGiven = true;
+        g.battleLog.push('💰 +' + monete + '₽');
       }
 
-      // Quando la battaglia ricomincia (nuovo incontro), reset del flag
-      if (
-        window.game &&
-        window.game.battlePhase === 'player' &&
-        window.game._wildRewardGiven
-      ) {
-        window.game._wildRewardGiven = false;
+      // Reset flag quando torniamo alla mappa (wildPokemon viene svuotato)
+      if (g && !g.wildPokemon) {
+        g._wildRewardGiven = false;
       }
 
       return originalRenderAdventure.apply(this, arguments);
     };
 
-    // Monkey-patch di attemptCatch: quando la cattura va a buon fine
-    // assegniamo le monete bonus (cattura = livello × 8)
+    // Patch cattura: bonus Lv×8 se la cattura va a buon fine
     const originalAttemptCatch = window.attemptCatch;
     if (originalAttemptCatch) {
       window.attemptCatch = function(ballType) {
-        // Salva lo stato HP del pokémon selvaggio prima della cattura
-        const wildBefore = window.game && window.game.wildPokemon;
-        const lvBefore = wildBefore ? wildBefore.level : 0;
-        const teamLenBefore = window.game ? window.game.team.length : 0;
+        const g = window.game;
+        const lvBefore = g && g.wildPokemon ? g.wildPokemon.level : 0;
+        const teamLenBefore = g ? g.team.length : 0;
 
         const result = originalAttemptCatch.apply(this, arguments);
 
-        // Dopo un tick, controlla se il team è cresciuto (cattura riuscita)
         setTimeout(function() {
-          if (
-            window.game &&
-            window.game.team.length > teamLenBefore &&
-            lvBefore > 0
-          ) {
+          if (window.game && window.game.team.length > teamLenBefore && lvBefore > 0) {
             const monete = lvBefore * 8;
             window.game.monete = (window.game.monete || 0) + monete;
             if (typeof saveGame === 'function') saveGame();
           }
-        }, 500);
+        }, 800);
 
         return result;
       };
     }
 
-    console.log('[Patch] Monete selvatiche attive: KO=Lv×5₽, Cattura=Lv×8₽');
+    console.log('[Patch] Monete selvatiche: KO=Lv×5₽, Cattura=Lv×8₽');
   }
 })();
 </script>
