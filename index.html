@@ -148,54 +148,71 @@
 <script src="Adventure.js"></script>
 <script src="Story.js"></script>
 
-<!-- PATCH: Monete da battaglie selvagge in Adventure mode (KO=Lv×5₽, Cattura=Lv×8₽) -->
+<!-- PATCH: Bypass hub selezione + monete da lotte selvagge (KO=Lv×5₽, Cattura=Lv×8₽) -->
 <script>
 (function() {
   'use strict';
 
-  // Aspettiamo che Adventure.js abbia finito di caricare tutti i suoi globali,
-  // poi wrappiamo handleBattleVictory e attemptCatch una volta sola.
-  window.addEventListener('load', function() {
+  // ── 1. Bypass schermata "Avventura Libera" ─────────────────────────────────
+  // renderAdventureHub è definita in Story.js e mostra le due card.
+  // La sovrascriviamo appena Story.js la dichiara, reindirizzando subito a renderStory.
+  Object.defineProperty(window, 'renderAdventureHub', {
+    configurable: true,
+    get: function() {
+      return function() {
+        if (typeof window.renderStory === 'function') window.renderStory();
+      };
+    },
+    set: function() {} // ignora ogni sovrascrittura da Story.js
+  });
 
-    // ── handleBattleVictory ──────────────────────────────────────────────────
-    // Chiamata quando il Pokémon nemico viene KO (lotta selvaggia o allenatore).
-    // Per le lotte selvagge (battleType === 'wild') aggiungiamo Lv×5₽.
-    if (typeof window.handleBattleVictory === 'function') {
-      var _origVictory = window.handleBattleVictory;
+  // ── 2. Monete da lotte selvagge ────────────────────────────────────────────
+  // handleBattleVictory e attemptCatch sono function-declarations globali
+  // di Adventure.js: esistono già al DOMContentLoaded.
+  // Le wrappiamo intercettando i valori PRIMA che la funzione originale
+  // azzeri game.wildPokemon / game.battleType.
+
+  document.addEventListener('DOMContentLoaded', function() {
+
+    // KO Pokémon selvaggio → Lv×5₽
+    var _origVictory = window.handleBattleVictory;
+    if (typeof _origVictory === 'function') {
       window.handleBattleVictory = function() {
         var g = window.game;
-        if (g && g.battleType === 'wild' && g.wildPokemon) {
-          var lv = g.wildPokemon.level || 1;
+        var iswild = g && (g.battleType === 'wild');
+        var lv = (iswild && g.wildPokemon) ? (g.wildPokemon.level || 1) : 0;
+        var result = _origVictory.apply(this, arguments);
+        if (iswild && lv > 0) {
           var earn = lv * 5;
-          g.monete = (g.monete || 0) + earn;
-          if (Array.isArray(g.battleLog))
-            g.battleLog.push('💰 +' + earn + '₽ (Pokémon selvaggio)');
+          if (window.game) {
+            window.game.monete = (window.game.monete || 0) + earn;
+            if (Array.isArray(window.game.battleLog))
+              window.game.battleLog.push('💰 +' + earn + '₽');
+            if (typeof window.saveGame === 'function') window.saveGame();
+          }
         }
-        return _origVictory.apply(this, arguments);
+        return result;
       };
     }
 
-    // ── attemptCatch ─────────────────────────────────────────────────────────
-    // Chiamata quando lanci una Ball. Se la cattura va a buon fine
-    // (il team cresce di 1) aggiungiamo Lv×8₽.
-    if (typeof window.attemptCatch === 'function') {
-      var _origCatch = window.attemptCatch;
+    // Cattura riuscita → Lv×8₽
+    var _origCatch = window.attemptCatch;
+    if (typeof _origCatch === 'function') {
       window.attemptCatch = function(ballType) {
         var g = window.game;
-        var lvBefore = (g && g.wildPokemon) ? (g.wildPokemon.level || 0) : 0;
-        var teamBefore = (g && Array.isArray(g.team)) ? g.team.length : 0;
+        var lv = (g && g.wildPokemon) ? (g.wildPokemon.level || 0) : 0;
+        var teamBefore = (g && g.team) ? g.team.length : 0;
         var result = _origCatch.apply(this, arguments);
-        // Controlliamo dopo un tick se il team è cresciuto (cattura riuscita)
         setTimeout(function() {
           var g2 = window.game;
-          if (g2 && Array.isArray(g2.team) && g2.team.length > teamBefore && lvBefore > 0) {
-            var earn = lvBefore * 8;
+          if (g2 && g2.team && g2.team.length > teamBefore && lv > 0) {
+            var earn = lv * 8;
             g2.monete = (g2.monete || 0) + earn;
             if (Array.isArray(g2.battleLog))
               g2.battleLog.push('💰 +' + earn + '₽ (cattura)');
             if (typeof window.saveGame === 'function') window.saveGame();
           }
-        }, 800);
+        }, 600);
         return result;
       };
     }
