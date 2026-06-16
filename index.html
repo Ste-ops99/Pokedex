@@ -203,6 +203,24 @@
       };
     }
 
+    // === PATCH STORY MODE ===
+    // storyBattleWon gestisce le vittorie in Story.js (usa `story`, non `game`)
+    const origStoryBattleWon = window.storyBattleWon;
+    if (origStoryBattleWon) {
+      window.storyBattleWon = function() {
+        const s = window.story;
+        if (s && s._battleType === 'wild' && s.wildPokemon) {
+          const lv = s.wildPokemon.level || 1;
+          const monete = lv * 5;
+          s.monete = (s.monete || 0) + monete;
+          if (Array.isArray(s.battleLog)) {
+            s.battleLog.push('💰 +' + monete + '₽ (selvatico KO)');
+          }
+        }
+        return origStoryBattleWon.apply(this, arguments);
+      };
+    }
+
     console.log('[Patch] ✅ Monete selvatiche attive: KO=Lv×5₽, Cattura=Lv×8₽');
   }
 })();
