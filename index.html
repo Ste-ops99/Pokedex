@@ -148,81 +148,58 @@
 <script src="Adventure.js"></script>
 <script src="Story.js"></script>
 
-<!-- PATCH: Monete da battaglie selvagge (Mystery Dungeon style) -->
+<!-- PATCH: Monete da battaglie selvagge in Story mode (KO=Lv×5₽, Cattura=Lv×8₽) -->
 <script>
 (function() {
-  // Aspetta che tutti gli script siano eseguiti prima di patchare
+  'use strict';
+
   window.addEventListener('load', function() {
-    setTimeout(patchWildMoneyRewards, 300);
-  });
 
-  function patchWildMoneyRewards() {
-    // handleBattleVictory è la funzione globale chiamata quando si vince
-    // (sia selvatico che allenatore). La patchiamo per aggiungere
-    // monete extra PRIMA che azzeri wildPokemon.
-    const origHandleBattleVictory = window.handleBattleVictory;
-    if (!origHandleBattleVictory) {
-      console.warn('[Patch] handleBattleVictory non trovata, riprovo...');
-      setTimeout(patchWildMoneyRewards, 500);
-      return;
-    }
-
-    window.handleBattleVictory = function() {
-      const g = window.game;
-      // Solo battaglie selvagge (non allenatori, non boss)
-      if (g && g.battleType === 'wild' && g.wildPokemon) {
-        const lv = g.wildPokemon.level || 1;
-        const monete = lv * 5;
-        g.monete = (g.monete || 0) + monete;
-        if (Array.isArray(g.battleLog)) {
-          g.battleLog.push('💰 +' + monete + '₽ (selvatico KO)');
-        }
+    // KO selvatico
+    function patchStoryWon() {
+      if (typeof window.storyBattleWon !== 'function') {
+        setTimeout(patchStoryWon, 300); return;
       }
-      return origHandleBattleVictory.apply(this, arguments);
-    };
-
-    // Patch cattura: bonus Lv×8
-    const origAttemptCatch = window.attemptCatch;
-    if (origAttemptCatch) {
-      window.attemptCatch = function(ballType) {
-        const g = window.game;
-        const lvBefore = g && g.wildPokemon ? g.wildPokemon.level : 0;
-        const teamLenBefore = g ? g.team.length : 0;
-
-        const result = origAttemptCatch.apply(this, arguments);
-
-        setTimeout(function() {
-          if (window.game && window.game.team.length > teamLenBefore && lvBefore > 0) {
-            const monete = lvBefore * 8;
-            window.game.monete = (window.game.monete || 0) + monete;
-            if (typeof saveGame === 'function') saveGame();
-          }
-        }, 900);
-
-        return result;
-      };
-    }
-
-    // === PATCH STORY MODE ===
-    // storyBattleWon gestisce le vittorie in Story.js (usa `story`, non `game`)
-    const origStoryBattleWon = window.storyBattleWon;
-    if (origStoryBattleWon) {
+      const orig = window.storyBattleWon;
       window.storyBattleWon = function() {
         const s = window.story;
         if (s && s._battleType === 'wild' && s.wildPokemon) {
           const lv = s.wildPokemon.level || 1;
-          const monete = lv * 5;
-          s.monete = (s.monete || 0) + monete;
-          if (Array.isArray(s.battleLog)) {
-            s.battleLog.push('💰 +' + monete + '₽ (selvatico KO)');
-          }
+          s.monete = (s.monete || 0) + lv * 5;
+          if (Array.isArray(s.battleLog))
+            s.battleLog.push('💰 +' + (lv * 5) + '₽');
         }
-        return origStoryBattleWon.apply(this, arguments);
+        return orig.apply(this, arguments);
       };
+      console.log('[Patch] ✅ Story wild KO money attivo');
     }
+    patchStoryWon();
 
-    console.log('[Patch] ✅ Monete selvatiche attive: KO=Lv×5₽, Cattura=Lv×8₽');
-  }
+    // Cattura selvatica
+    function patchStoryCatch() {
+      if (typeof window.storyAttemptCatch !== 'function') {
+        setTimeout(patchStoryCatch, 300); return;
+      }
+      const orig = window.storyAttemptCatch;
+      window.storyAttemptCatch = function(ballType) {
+        const s = window.story;
+        const lvBefore = s && s.wildPokemon ? s.wildPokemon.level : 0;
+        const caughtBefore = s ? (s.caught || []).length : 0;
+        const result = orig.apply(this, arguments);
+        setTimeout(function() {
+          const s2 = window.story;
+          if (s2 && (s2.caught || []).length > caughtBefore && lvBefore > 0) {
+            s2.monete = (s2.monete || 0) + lvBefore * 8;
+            if (typeof saveStory === 'function') saveStory();
+          }
+        }, 1000);
+        return result;
+      };
+      console.log('[Patch] ✅ Story catch money attivo');
+    }
+    patchStoryCatch();
+
+  });
 })();
 </script>
 </body>
