@@ -155,6 +155,13 @@
 
   window.addEventListener('load', function() {
 
+    // Salta la schermata di selezione — va direttamente alla storia
+    if (typeof window.renderAdventureHub === 'function') {
+      window.renderAdventureHub = function() {
+        if (typeof window.renderStory === 'function') window.renderStory();
+      };
+    }
+
     // KO selvatico
     function patchStoryWon() {
       if (typeof window.storyBattleWon !== 'function') {
@@ -171,7 +178,6 @@
         }
         return orig.apply(this, arguments);
       };
-      console.log('[Patch] ✅ Story wild KO money attivo');
     }
     patchStoryWon();
 
@@ -195,7 +201,6 @@
         }, 1000);
         return result;
       };
-      console.log('[Patch] ✅ Story catch money attivo');
     }
     patchStoryCatch();
 
