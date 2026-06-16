@@ -74,7 +74,7 @@
     <button class="mode-btn active" data-mode="dex">📖 Pokédex</button>
     <button class="mode-btn" data-mode="quiz-who">🎮 Chi è?</button>
     <button class="mode-btn" data-mode="quiz-weak">⚡ Quiz Debolezze</button>
-    <button class="mode-btn adventure-btn" data-mode="adventure">🗺️ Avventura</button>
+    <button class="mode-btn adventure-btn" data-mode="adventure">📖 Storia</button>
 </nav>
 
 <!-- GRIGLIA CARD -->
@@ -148,64 +148,58 @@
 <script src="Adventure.js"></script>
 <script src="Story.js"></script>
 
-<!-- PATCH: Monete da battaglie selvagge in Story mode (KO=Lv×5₽, Cattura=Lv×8₽) -->
+<!-- PATCH: Monete da battaglie selvagge in Adventure mode (KO=Lv×5₽, Cattura=Lv×8₽) -->
 <script>
 (function() {
   'use strict';
 
-  // Story.js fa window.storyBattleWon = function(){...} alla riga 808.
-  // Intercettiamo ogni assegnazione con defineProperty, così la patch
-  // sopravvive anche se Story.js sovrascrive la funzione dopo il load.
-  var _realWon = null;
-  Object.defineProperty(window, 'storyBattleWon', {
-    configurable: true,
-    get: function() { return _realWon; },
-    set: function(fn) {
-      _realWon = function() {
-        var s = window.story;
-        if (s && s._battleType === 'wild' && s.wildPokemon) {
-          var lv = s.wildPokemon.level || 1;
-          s.monete = (s.monete || 0) + lv * 5;
-          if (Array.isArray(s.battleLog))
-            s.battleLog.push('💰 +' + (lv * 5) + '₽');
+  // Aspettiamo che Adventure.js abbia finito di caricare tutti i suoi globali,
+  // poi wrappiamo handleBattleVictory e attemptCatch una volta sola.
+  window.addEventListener('load', function() {
+
+    // ── handleBattleVictory ──────────────────────────────────────────────────
+    // Chiamata quando il Pokémon nemico viene KO (lotta selvaggia o allenatore).
+    // Per le lotte selvagge (battleType === 'wild') aggiungiamo Lv×5₽.
+    if (typeof window.handleBattleVictory === 'function') {
+      var _origVictory = window.handleBattleVictory;
+      window.handleBattleVictory = function() {
+        var g = window.game;
+        if (g && g.battleType === 'wild' && g.wildPokemon) {
+          var lv = g.wildPokemon.level || 1;
+          var earn = lv * 5;
+          g.monete = (g.monete || 0) + earn;
+          if (Array.isArray(g.battleLog))
+            g.battleLog.push('💰 +' + earn + '₽ (Pokémon selvaggio)');
         }
-        return fn.apply(this, arguments);
+        return _origVictory.apply(this, arguments);
       };
     }
-  });
 
-  // Stesso approccio per storyAttemptCatch
-  var _realCatch = null;
-  Object.defineProperty(window, 'storyAttemptCatch', {
-    configurable: true,
-    get: function() { return _realCatch; },
-    set: function(fn) {
-      _realCatch = function(ballType) {
-        var s = window.story;
-        var lvBefore = s && s.wildPokemon ? s.wildPokemon.level : 0;
-        var caughtBefore = s ? (s.caught || []).length : 0;
-        var result = fn.apply(this, arguments);
+    // ── attemptCatch ─────────────────────────────────────────────────────────
+    // Chiamata quando lanci una Ball. Se la cattura va a buon fine
+    // (il team cresce di 1) aggiungiamo Lv×8₽.
+    if (typeof window.attemptCatch === 'function') {
+      var _origCatch = window.attemptCatch;
+      window.attemptCatch = function(ballType) {
+        var g = window.game;
+        var lvBefore = (g && g.wildPokemon) ? (g.wildPokemon.level || 0) : 0;
+        var teamBefore = (g && Array.isArray(g.team)) ? g.team.length : 0;
+        var result = _origCatch.apply(this, arguments);
+        // Controlliamo dopo un tick se il team è cresciuto (cattura riuscita)
         setTimeout(function() {
-          var s2 = window.story;
-          if (s2 && (s2.caught || []).length > caughtBefore && lvBefore > 0) {
-            s2.monete = (s2.monete || 0) + lvBefore * 8;
-            if (typeof saveStory === 'function') saveStory();
+          var g2 = window.game;
+          if (g2 && Array.isArray(g2.team) && g2.team.length > teamBefore && lvBefore > 0) {
+            var earn = lvBefore * 8;
+            g2.monete = (g2.monete || 0) + earn;
+            if (Array.isArray(g2.battleLog))
+              g2.battleLog.push('💰 +' + earn + '₽ (cattura)');
+            if (typeof window.saveGame === 'function') window.saveGame();
           }
-        }, 1000);
+        }, 800);
         return result;
       };
     }
-  });
 
-  // Bypass schermata di selezione: intercetta ogni assegnazione con defineProperty
-  Object.defineProperty(window, 'renderAdventureHub', {
-    configurable: true,
-    get: function() {
-      return function() {
-        if (typeof window.renderStory === 'function') window.renderStory();
-      };
-    },
-    set: function() {} // ignora ogni sovrascrittura
   });
 
 })();
