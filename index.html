@@ -197,13 +197,15 @@
     }
   });
 
-  // Bypass schermata di selezione — va diretto alla storia
-  window.addEventListener('load', function() {
-    if (typeof window.renderAdventureHub === 'function') {
-      window.renderAdventureHub = function() {
+  // Bypass schermata di selezione: intercetta ogni assegnazione con defineProperty
+  Object.defineProperty(window, 'renderAdventureHub', {
+    configurable: true,
+    get: function() {
+      return function() {
         if (typeof window.renderStory === 'function') window.renderStory();
       };
-    }
+    },
+    set: function() {} // ignora ogni sovrascrittura
   });
 
 })();
