@@ -153,47 +153,40 @@
 (function() {
   'use strict';
 
-  window.addEventListener('load', function() {
-
-    // Salta la schermata di selezione — va direttamente alla storia
-    if (typeof window.renderAdventureHub === 'function') {
-      window.renderAdventureHub = function() {
-        if (typeof window.renderStory === 'function') window.renderStory();
-      };
-    }
-
-    // KO selvatico
-    function patchStoryWon() {
-      if (typeof window.storyBattleWon !== 'function') {
-        setTimeout(patchStoryWon, 300); return;
-      }
-      const orig = window.storyBattleWon;
-      window.storyBattleWon = function() {
-        const s = window.story;
+  // Story.js fa window.storyBattleWon = function(){...} alla riga 808.
+  // Intercettiamo ogni assegnazione con defineProperty, così la patch
+  // sopravvive anche se Story.js sovrascrive la funzione dopo il load.
+  var _realWon = null;
+  Object.defineProperty(window, 'storyBattleWon', {
+    configurable: true,
+    get: function() { return _realWon; },
+    set: function(fn) {
+      _realWon = function() {
+        var s = window.story;
         if (s && s._battleType === 'wild' && s.wildPokemon) {
-          const lv = s.wildPokemon.level || 1;
+          var lv = s.wildPokemon.level || 1;
           s.monete = (s.monete || 0) + lv * 5;
           if (Array.isArray(s.battleLog))
             s.battleLog.push('💰 +' + (lv * 5) + '₽');
         }
-        return orig.apply(this, arguments);
+        return fn.apply(this, arguments);
       };
     }
-    patchStoryWon();
+  });
 
-    // Cattura selvatica
-    function patchStoryCatch() {
-      if (typeof window.storyAttemptCatch !== 'function') {
-        setTimeout(patchStoryCatch, 300); return;
-      }
-      const orig = window.storyAttemptCatch;
-      window.storyAttemptCatch = function(ballType) {
-        const s = window.story;
-        const lvBefore = s && s.wildPokemon ? s.wildPokemon.level : 0;
-        const caughtBefore = s ? (s.caught || []).length : 0;
-        const result = orig.apply(this, arguments);
+  // Stesso approccio per storyAttemptCatch
+  var _realCatch = null;
+  Object.defineProperty(window, 'storyAttemptCatch', {
+    configurable: true,
+    get: function() { return _realCatch; },
+    set: function(fn) {
+      _realCatch = function(ballType) {
+        var s = window.story;
+        var lvBefore = s && s.wildPokemon ? s.wildPokemon.level : 0;
+        var caughtBefore = s ? (s.caught || []).length : 0;
+        var result = fn.apply(this, arguments);
         setTimeout(function() {
-          const s2 = window.story;
+          var s2 = window.story;
           if (s2 && (s2.caught || []).length > caughtBefore && lvBefore > 0) {
             s2.monete = (s2.monete || 0) + lvBefore * 8;
             if (typeof saveStory === 'function') saveStory();
@@ -202,9 +195,17 @@
         return result;
       };
     }
-    patchStoryCatch();
-
   });
+
+  // Bypass schermata di selezione — va diretto alla storia
+  window.addEventListener('load', function() {
+    if (typeof window.renderAdventureHub === 'function') {
+      window.renderAdventureHub = function() {
+        if (typeof window.renderStory === 'function') window.renderStory();
+      };
+    }
+  });
+
 })();
 </script>
 </body>
