@@ -148,31 +148,19 @@
 <script src="Adventure.js"></script>
 <script src="Story.js"></script>
 
-<!-- PATCH: Bypass hub selezione + monete da lotte selvagge (KO=Lv×5₽, Cattura=Lv×8₽) -->
+<!-- PATCH 1/2: Bypass "Avventura Libera" — DOPO Story.js così sovrascrive la sua dichiarazione -->
+<script>
+function renderAdventureHub() {
+  if (typeof renderStory === 'function') renderStory();
+}
+</script>
+
+<!-- PATCH 2/2: Monete da lotte selvagge (KO=Lv×5₽, Cattura=Lv×8₽) -->
 <script>
 (function() {
   'use strict';
 
-  // ── 1. Bypass schermata "Avventura Libera" ─────────────────────────────────
-  // renderAdventureHub è definita in Story.js e mostra le due card.
-  // La sovrascriviamo appena Story.js la dichiara, reindirizzando subito a renderStory.
-  Object.defineProperty(window, 'renderAdventureHub', {
-    configurable: true,
-    get: function() {
-      return function() {
-        if (typeof window.renderStory === 'function') window.renderStory();
-      };
-    },
-    set: function() {} // ignora ogni sovrascrittura da Story.js
-  });
-
-  // ── 2. Monete da lotte selvagge ────────────────────────────────────────────
-  // handleBattleVictory e attemptCatch sono function-declarations globali
-  // di Adventure.js: esistono già al DOMContentLoaded.
-  // Le wrappiamo intercettando i valori PRIMA che la funzione originale
-  // azzeri game.wildPokemon / game.battleType.
-
-  document.addEventListener('DOMContentLoaded', function() {
+  window.addEventListener('load', function() {
 
     // KO Pokémon selvaggio → Lv×5₽
     var _origVictory = window.handleBattleVictory;
